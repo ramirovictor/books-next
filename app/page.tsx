@@ -1,9 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import axios from "axios";
 import {
-  AppBar,
   Box,
   Button,
   Container,
@@ -13,7 +11,6 @@ import {
   DialogTitle,
   IconButton,
   TextField,
-  Toolbar,
   Typography,
   Table,
   TableHead,
@@ -21,19 +18,14 @@ import {
   TableCell,
   TableBody,
   Paper,
+  Snackbar,
+  Alert,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import EditIcon from "@mui/icons-material/Edit";
 import DeleteIcon from "@mui/icons-material/Delete";
-
-type Book = {
-  id?: number;
-  title: string;
-  author: string;
-  price: number;
-};
-
-const API_BASE = "https://localhost:8443/api/v1";
+import SearchIcon from "@mui/icons-material/Search";
+import { booksApi, type Book } from "@/lib/api";
 
 export default function HomePage() {
   const [books, setBooks] = useState<Book[]>([]);
@@ -41,24 +33,32 @@ export default function HomePage() {
   const [editing, setEditing] = useState<Book | null>(null);
   const [form, setForm] = useState<Book>({ title: "", author: "", price: 0 });
   const [loading, setLoading] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: "success" | "error" }>({
+    open: false,
+    message: "",
+    severity: "success",
+  });
 
   const load = async () => {
     setLoading(true);
     try {
-      const res = await axios.get(`${API_BASE}/books`, {
-        params: { page: 0, size: 50 },
-      });
-      setBooks(res.data.content ?? []);
+      const data = await booksApi.getAll();
+      setBooks(data);
     } catch (e) {
       console.error(e);
-      alert("Não consegui carregar os livros. Verifique se o backend está rodando em https://localhost:8443");
+      setSnackbar({
+        open: true,
+        message: "Failed to load books. Make sure the backend is running at https://localhost:8443",
+        severity: "error",
+      });
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    // precisa já ter aberto https://localhost:8443/swagger e aceitado o certificado
+    // You need to have already opened https://localhost:8443/swagger and accepted the certificate
     load();
   }, []);
 
@@ -76,40 +76,65 @@ export default function HomePage() {
 
   const handleDelete = async (book: Book) => {
     if (!book.id) return;
-    if (!confirm(`Remover "${book.title}"?`)) return;
-    await axios.delete(`${API_BASE}/books/${book.id}`);
-    await load();
+    if (!confirm(`Remove "${book.title}"?`)) return;
+    try {
+      await booksApi.delete(book.id);
+      setSnackbar({ open: true, message: `"${book.title}" deleted successfully!`, severity: "success" });
+      await load();
+    } catch (e) {
+      console.error(e);
+      setSnackbar({ open: true, message: "Failed to delete book", severity: "error" });
+    }
   };
 
   const handleSave = async () => {
-    if (!form.title || !form.author) return;
-    if (editing?.id) {
-      await axios.put(`${API_BASE}/books/${editing.id}`, form);
-    } else {
-      await axios.post(`${API_BASE}/books`, form);
+    if (!form.title || !form.author) {
+      setSnackbar({ open: true, message: "Please fill in all fields", severity: "error" });
+      return;
     }
-    setOpen(false);
-    await load();
+    try {
+      if (editing?.id) {
+        await booksApi.update(editing.id, form);
+        setSnackbar({ open: true, message: `"${form.title}" updated successfully!`, severity: "success" });
+      } else {
+        await booksApi.create(form);
+        setSnackbar({ open: true, message: `"${form.title}" created successfully!`, severity: "success" });
+      }
+      setOpen(false);
+      await load();
+    } catch (e) {
+      console.error(e);
+      setSnackbar({ open: true, message: "Failed to save book", severity: "error" });
+    }
   };
 
-  return (
-    <Box sx={{ minHeight: "100vh", bgcolor: "#f3f4f6" }}>
-      <AppBar position="static" sx={{ bgcolor: "#111827" }}>
-        <Toolbar>
-          <Typography variant="h6" sx={{ flexGrow: 1 }}>
-            Books – Next.js + MUI
-          </Typography>
-          <Button color="inherit" startIcon={<AddIcon />} onClick={handleOpenNew}>
-            Novo
-          </Button>
-        </Toolbar>
-      </AppBar>
+  const filteredBooks = books.filter((b) =>
+    b.title.toLowerCase().includes(searchTerm.toLowerCase())
+  );
 
+  return (
+    <Box sx={{ bgcolor: "#f3f4f6", pb: 4, minHeight: "100%" }}>
       <Container sx={{ mt: 4 }}>
-        <Box sx={{ display: "flex", justifyContent: "space-between", mb: 2 }}>
-          <Typography variant="h5">Lista de livros</Typography>
-          <Button variant="outlined" onClick={load} disabled={loading}>
-            {loading ? "Carregando..." : "Atualizar"}
+        <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 3, flexWrap: "wrap", gap: 2 }}>
+          <Typography variant="h5">Book List</Typography>
+          <Button variant="contained" startIcon={<AddIcon />} onClick={handleOpenNew}>
+            New Book
+          </Button>
+        </Box>
+
+        <Box sx={{ display: "flex", gap: 2, mb: 3, flexWrap: "wrap" }}>
+          <TextField
+            placeholder="Search by title..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            size="small"
+            sx={{ flexGrow: 1, minWidth: "200px", bgcolor: "white" }}
+            InputProps={{
+              startAdornment: <SearchIcon sx={{ mr: 1, color: "text.secondary" }} />,
+            }}
+          />
+          <Button variant="contained" onClick={load} disabled={loading} color="primary">
+            {loading ? "Loading..." : "Refresh"}
           </Button>
         </Box>
 
@@ -117,32 +142,50 @@ export default function HomePage() {
           <Table>
             <TableHead>
               <TableRow>
-                <TableCell>Título</TableCell>
-                <TableCell>Autor</TableCell>
-                <TableCell>Preço</TableCell>
-                <TableCell align="right">Ações</TableCell>
+                <TableCell>Title</TableCell>
+                <TableCell>Author</TableCell>
+                <TableCell>Price</TableCell>
+                <TableCell align="right">Actions</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
-              {books.map((b) => (
-                <TableRow key={b.id}>
+              {filteredBooks.map((b) => (
+                <TableRow key={b.id} hover>
                   <TableCell>{b.title}</TableCell>
                   <TableCell>{b.author}</TableCell>
-                  <TableCell>R$ {b.price?.toFixed(2)}</TableCell>
+                  <TableCell>$ {b.price?.toFixed(2)}</TableCell>
                   <TableCell align="right">
-                    <IconButton color="primary" onClick={() => handleEdit(b)}>
+                    <IconButton
+                      onClick={() => handleEdit(b)}
+                      sx={{ color: "#1976d2" }}
+                      title="Edit"
+                    >
                       <EditIcon />
                     </IconButton>
-                    <IconButton color="error" onClick={() => handleDelete(b)}>
+                    <IconButton
+                      onClick={() => handleDelete(b)}
+                      sx={{ color: "#d32f2f" }}
+                      title="Delete"
+                    >
                       <DeleteIcon />
                     </IconButton>
                   </TableCell>
                 </TableRow>
               ))}
 
-              {books.length === 0 && !loading && (
+              {filteredBooks.length === 0 && !loading && (
                 <TableRow>
-                  <TableCell colSpan={4}>Nenhum livro encontrado.</TableCell>
+                  <TableCell colSpan={4} align="center" sx={{ py: 4 }}>
+                    {searchTerm ? "No books found matching your search." : "No books found. Click 'New Book' to add one."}
+                  </TableCell>
+                </TableRow>
+              )}
+
+              {loading && (
+                <TableRow>
+                  <TableCell colSpan={4} align="center" sx={{ py: 4 }}>
+                    Loading...
+                  </TableCell>
                 </TableRow>
               )}
             </TableBody>
@@ -151,35 +194,54 @@ export default function HomePage() {
       </Container>
 
       <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="sm">
-        <DialogTitle>{editing ? "Editar livro" : "Novo livro"}</DialogTitle>
+        <DialogTitle>{editing ? "Edit Book" : "New Book"}</DialogTitle>
         <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 2, mt: 1 }}>
           <TextField
-            label="Título"
+            label="Title"
             value={form.title}
             onChange={(e) => setForm({ ...form, title: e.target.value })}
             required
+            fullWidth
           />
           <TextField
-            label="Autor"
+            label="Author"
             value={form.author}
             onChange={(e) => setForm({ ...form, author: e.target.value })}
             required
+            fullWidth
           />
           <TextField
-            label="Preço"
+            label="Price"
             type="number"
             value={form.price}
             onChange={(e) => setForm({ ...form, price: Number(e.target.value) })}
             required
+            fullWidth
+            inputProps={{ step: "0.01", min: "0" }}
           />
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setOpen(false)}>Cancelar</Button>
+          <Button onClick={() => setOpen(false)}>Cancel</Button>
           <Button onClick={handleSave} variant="contained">
-            Salvar
+            Save
           </Button>
         </DialogActions>
       </Dialog>
+
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={4000}
+        onClose={() => setSnackbar({ ...snackbar, open: false })}
+        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+      >
+        <Alert
+          onClose={() => setSnackbar({ ...snackbar, open: false })}
+          severity={snackbar.severity}
+          sx={{ width: "100%" }}
+        >
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 }
